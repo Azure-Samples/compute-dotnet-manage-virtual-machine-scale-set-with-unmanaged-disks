@@ -4,7 +4,7 @@ platforms: .Net
 author: anuchandy
 ---
 
-#Getting Started with Compute - Manage Virtual Machine Scale Set With Unmanaged Disks - in .Net #
+# Getting Started with Compute - Manage Virtual Machine Scale Set With Unmanaged Disks - in .Net #
 
           Azure Compute sample for managing virtual machine scale sets -
            - Create a virtual machine scale set behind an Internet facing load balancer
