@@ -22,7 +22,7 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
         private readonly static string natPool60XXto23 = "natPool60XXto23";
         private readonly static string userName = "tirekicker";
         private readonly static string sshKey = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCfSPC2K7LZcFKEO+/t3dzmQYtrJFZNxOsbVgOVKietqHyvmYGHEC0J2wPdAqQ/63g/hhAEFRoyehM+rbeDri4txB3YFfnOK58jqdkyXzupWqXzOrlKY4Wz9SKjjN765+dqUITjKRIaAip1Ri137szRg71WnrmdP3SphTRlCx1Bk2nXqWPsclbRDCiZeF8QOTi4JqbmJyK5+0UqhqYRduun8ylAwKKQJ1NJt85sYIHn9f1Rfr6Tq2zS0wZ7DHbZL+zB5rSlAr8QyUdg/GQD+cmSs6LvPJKL78d6hMGk84ARtFo4A79ovwX/Fj01znDQkU6nJildfkaolH2rWFG/qttD azjava@javalib.Com";
-        private readonly static string apacheInstallScript = "https://raw.githubusercontent.com/Azure/azure-sdk-for-net/Fluent/Samples/ResourceManagement/Compute/ManageVirtualMachineScaleSetWithUnmanagedDisks/Resources/install_apache.sh";
+        private readonly static string apacheInstallScript = "https://raw.githubusercontent.com/Azure/azure-sdk-for-net/Fluent/Samples/Asset/install_apache.sh";
         private readonly static string installCommand = "bash install_apache.sh Abc.123x(";
 
         /**
@@ -110,13 +110,38 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
                 var loadBalancer1 = azure.LoadBalancers.Define(loadBalancerName1)
                         .WithRegion(Region.USEast)
                         .WithExistingResourceGroup(rgName)
+                        // Add two rules that uses above backend and probe
+                        .DefineLoadBalancingRule(httpLoadBalancingRule)
+                            .WithProtocol(TransportProtocol.Tcp)
+                            .FromFrontend(frontendName)
+                            .FromFrontendPort(80)
+                            .ToBackend(backendPoolName1)
+                            .WithProbe(httpProbe)
+                            .Attach()
+                        .DefineLoadBalancingRule(httpsLoadBalancingRule)
+                            .WithProtocol(TransportProtocol.Tcp)
+                            .FromFrontend(frontendName)
+                            .FromFrontendPort(443)
+                            .ToBackend(backendPoolName2)
+                            .WithProbe(httpsProbe)
+                            .Attach()
+                        // Add nat pools to enable direct VM connectivity for
+                        //  SSH to port 22 and TELNET to port 23
+                        .DefineInboundNatPool(natPool50XXto22)
+                            .WithProtocol(TransportProtocol.Tcp)
+                            .FromFrontend(frontendName)
+                            .FromFrontendPortRange(5000, 5099)
+                            .ToBackendPort(22)
+                            .Attach()
+                        .DefineInboundNatPool(natPool60XXto23)
+                            .WithProtocol(TransportProtocol.Tcp)
+                            .FromFrontend(frontendName)
+                            .FromFrontendPortRange(6000, 6099)
+                            .ToBackendPort(23)
+                            .Attach()
+                        // Explicitly define the frontend
                         .DefinePublicFrontend(frontendName)
                             .WithExistingPublicIPAddress(publicIpAddress)
-                            .Attach()
-                        // Add two backend one per rule
-                        .DefineBackend(backendPoolName1)
-                            .Attach()
-                        .DefineBackend(backendPoolName2)
                             .Attach()
                         // Add two probes one per rule
                         .DefineHttpProbe(httpProbe)
@@ -126,35 +151,6 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
                         .DefineHttpProbe(httpsProbe)
                             .WithRequestPath("/")
                             .WithPort(443)
-                            .Attach()
-                        // Add two rules that uses above backend and probe
-                        .DefineLoadBalancingRule(httpLoadBalancingRule)
-                            .WithProtocol(TransportProtocol.Tcp)
-                            .WithFrontend(frontendName)
-                            .WithFrontendPort(80)
-                            .WithProbe(httpProbe)
-                            .WithBackend(backendPoolName1)
-                            .Attach()
-                        .DefineLoadBalancingRule(httpsLoadBalancingRule)
-                            .WithProtocol(TransportProtocol.Tcp)
-                            .WithFrontend(frontendName)
-                            .WithFrontendPort(443)
-                            .WithProbe(httpsProbe)
-                            .WithBackend(backendPoolName2)
-                            .Attach()
-                        // Add nat pools to enable direct VM connectivity for
-                        //  SSH to port 22 and TELNET to port 23
-                        .DefineInboundNatPool(natPool50XXto22)
-                            .WithProtocol(TransportProtocol.Tcp)
-                            .WithFrontend(frontendName)
-                            .WithFrontendPortRange(5000, 5099)
-                            .WithBackendPort(22)
-                            .Attach()
-                        .DefineInboundNatPool(natPool60XXto23)
-                            .WithProtocol(TransportProtocol.Tcp)
-                            .WithFrontend(frontendName)
-                            .WithFrontendPortRange(6000, 6099)
-                            .WithBackendPort(23)
                             .Attach()
                         .Create();
 
