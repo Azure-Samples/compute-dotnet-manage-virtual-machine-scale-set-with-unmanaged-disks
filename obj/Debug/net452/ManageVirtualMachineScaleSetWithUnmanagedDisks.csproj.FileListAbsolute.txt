@@ -1,4 +1,0 @@
-C:\Sources\dotnet-samples\compute-dotnet-manage-virtual-machine-scale-set-with-unmanaged-disks\bin\Debug\net452\ManageVirtualMachineScaleSetWithUnmanagedDisks.runtimeconfig.json
-C:\Sources\dotnet-samples\compute-dotnet-manage-virtual-machine-scale-set-with-unmanaged-disks\bin\Debug\net452\ManageVirtualMachineScaleSetWithUnmanagedDisks.runtimeconfig.dev.json
-C:\Sources\dotnet-samples\compute-dotnet-manage-virtual-machine-scale-set-with-unmanaged-disks\obj\Debug\net452\ManageVirtualMachineScaleSetWithUnmanagedDisks.csproj.ManageVirtualMachineScaleSetWithUnmanagedDisks.exe.config
-C:\Sources\dotnet-samples\compute-dotnet-manage-virtual-machine-scale-set-with-unmanaged-disks\obj\Debug\net452\ManageVirtualMachineScaleSetWithUnmanagedDisks.csproj.CoreCompileInputs.cache
