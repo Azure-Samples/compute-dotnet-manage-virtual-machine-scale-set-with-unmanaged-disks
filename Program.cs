@@ -13,8 +13,6 @@ using Azure.ResourceManager.Network.Models;
 using Azure.ResourceManager.Network;
 using Azure.ResourceManager.Compute.Models;
 using Azure.ResourceManager.Compute;
-using System.Net.NetworkInformation;
-using System.Xml.Linq;
 
 namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
 {
@@ -28,7 +26,6 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
         private readonly static string httpsLoadBalancingRule = "httpsRule";
         private readonly static string natPool50XXto22 = "natPool50XXto22";
         private readonly static string natPool60XXto23 = "natPool60XXto23";
-        private readonly static string userName = Utilities.CreateUsername();
         private readonly static string sshKey = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCfSPC2K7LZcFKEO+/t3dzmQYtrJFZNxOsbVgOVKietqHyvmYGHEC0J2wPdAqQ/63g/hhAEFRoyehM+rbeDri4txB3YFfnOK58jqdkyXzupWqXzOrlKY4Wz9SKjjN765+dqUITjKRIaAip1Ri137szRg71WnrmdP3SphTRlCx1Bk2nXqWPsclbRDCiZeF8QOTi4JqbmJyK5+0UqhqYRduun8ylAwKKQJ1NJt85sYIHn9f1Rfr6Tq2zS0wZ7DHbZL+zB5rSlAr8QyUdg/GQD+cmSs6LvPJKL78d6hMGk84ARtFo4A79ovwX/Fj01znDQkU6nJildfkaolH2rWFG/qttD azjava@javalib.Com";
         private readonly static string apacheInstallScript = "https://raw.githubusercontent.com/Azure/azure-libraries-for-net/master/Samples/Asset/install_apache.sh";
         private readonly static string installCommand = "bash install_apache.sh Abc.123x(";
@@ -47,7 +44,6 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
         {
             string rgName = Utilities.CreateRandomName("ComputeSampleRG");
             string vnetName = Utilities.CreateRandomName("vnet");
-
             string vmssName = Utilities.CreateRandomName("vmss");
             string storageAccountName1 = Utilities.CreateRandomName("1stg");
             string storageAccountName2 = Utilities.CreateRandomName("2stg");
@@ -74,15 +70,6 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
                 // Create a virtual network with a frontend subnet
                 Utilities.Log("Creating virtual network with a frontend subnet ...");
 
-                //var network = azure.Networks.Define(vnetName)
-                //        .WithRegion(Region.USEast)
-                //        .WithNewResourceGroup(rgName)
-                //        .WithAddressSpace("172.16.0.0/16")
-                //        .DefineSubnet("Front-end")
-                //            .WithAddressPrefix("172.16.1.0/24")
-                //            .Attach()
-                //        .Create();
-
                 Utilities.Log("Creating virtual network...");
                 VirtualNetworkData vnetInput = new VirtualNetworkData()
                 {
@@ -96,21 +83,27 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
                     },
                 };
                 var vnetLro = await resourceGroup.GetVirtualNetworks().CreateOrUpdateAsync(WaitUntil.Completed, vnetName, vnetInput);
-                Utilities.Log($"Created a virtual network: {vnetLro.Value.Data.Name}");
+                VirtualNetworkResource vnet = vnetLro.Value;
+                Utilities.Log($"Created a virtual network: {vnet.Data.Name}");
 
                 //=============================================================
                 // Create a public IP address
                 Utilities.Log("Creating a public IP address...");
 
-                var publicIpAddress = azure.PublicIPAddresses.Define(publicIpName)
-                        .WithRegion(Region.USEast)
-                        .WithExistingResourceGroup(rgName)
-                        .WithLeafDomainLabel(publicIpName)
-                        .Create();
-
-                Utilities.Log("Created a public IP address");
-                // Print the IPAddress details
-                Utilities.PrintIPAddress(publicIpAddress);
+                PublicIPAddressData publicIPInput = new PublicIPAddressData()
+                {
+                    Location = resourceGroup.Data.Location,
+                    Sku = new PublicIPAddressSku()
+                    {
+                        Name = PublicIPAddressSkuName.Standard,
+                        Tier = PublicIPAddressSkuTier.Regional
+                    },
+                    PublicIPAllocationMethod = NetworkIPAllocationMethod.Static,
+                    DnsSettings = new PublicIPAddressDnsSettings { DomainNameLabel = publicIpName },
+                };
+                var publicIPLro = await resourceGroup.GetPublicIPAddresses().CreateOrUpdateAsync(WaitUntil.Completed, publicIpName, publicIPInput);
+                PublicIPAddressResource publicIP = publicIPLro.Value;
+                Utilities.Log($"Created a public IP address: {publicIPLro.Value.Data.Name}");
 
                 //=============================================================
                 // Create an Internet facing load balancer with
@@ -137,56 +130,128 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
                         + "  balancer to a port for a specific virtual machine in the backend address pool\n"
                         + "  - this provides direct VM connectivity for SSH to port 22 and TELNET to port 23");
 
-                var loadBalancer1 = azure.LoadBalancers.Define(loadBalancerName1)
-                        .WithRegion(Region.USEast)
-                        .WithExistingResourceGroup(rgName)
-                        // Add two rules that uses above backend and probe
-                        .DefineLoadBalancingRule(httpLoadBalancingRule)
-                            .WithProtocol(TransportProtocol.Tcp)
-                            .FromFrontend(frontendName)
-                            .FromFrontendPort(80)
-                            .ToBackend(backendPoolName1)
-                            .WithProbe(httpProbe)
-                            .Attach()
-                        .DefineLoadBalancingRule(httpsLoadBalancingRule)
-                            .WithProtocol(TransportProtocol.Tcp)
-                            .FromFrontend(frontendName)
-                            .FromFrontendPort(443)
-                            .ToBackend(backendPoolName2)
-                            .WithProbe(httpsProbe)
-                            .Attach()
-                        // Add nat pools to enable direct VM connectivity for
-                        //  SSH to port 22 and TELNET to port 23
-                        .DefineInboundNatPool(natPool50XXto22)
-                            .WithProtocol(TransportProtocol.Tcp)
-                            .FromFrontend(frontendName)
-                            .FromFrontendPortRange(5000, 5099)
-                            .ToBackendPort(22)
-                            .Attach()
-                        .DefineInboundNatPool(natPool60XXto23)
-                            .WithProtocol(TransportProtocol.Tcp)
-                            .FromFrontend(frontendName)
-                            .FromFrontendPortRange(6000, 6099)
-                            .ToBackendPort(23)
-                            .Attach()
-                        // Explicitly define the frontend
-                        .DefinePublicFrontend(frontendName)
-                            .WithExistingPublicIPAddress(publicIpAddress)
-                            .Attach()
-                        // Add two probes one per rule
-                        .DefineHttpProbe(httpProbe)
-                            .WithRequestPath("/")
-                            .WithPort(80)
-                            .Attach()
-                        .DefineHttpProbe(httpsProbe)
-                            .WithRequestPath("/")
-                            .WithPort(443)
-                            .Attach()
-                        .Create();
+                var frontendIPConfigurationId = new ResourceIdentifier($"{resourceGroup.Id}/providers/Microsoft.Network/loadBalancers/{loadBalancerName1}/frontendIPConfigurations/{frontendName}");
+                var backendAddressPoolId1 = new ResourceIdentifier($"{resourceGroup.Id}/providers/Microsoft.Network/loadBalancers/{loadBalancerName1}/backendAddressPools/{backendPoolName1}");
+                var backendAddressPoolId2 = new ResourceIdentifier($"{resourceGroup.Id}/providers/Microsoft.Network/loadBalancers/{loadBalancerName1}/backendAddressPools/{backendPoolName2}");
+                LoadBalancerData loadBalancerInput = new LoadBalancerData()
+                {
+                    Location = resourceGroup.Data.Location,
+                    Sku = new LoadBalancerSku()
+                    {
+                        Name = LoadBalancerSkuName.Standard,
+                        Tier = LoadBalancerSkuTier.Regional,
+                    },
+                    // Explicitly define the frontend
+                    FrontendIPConfigurations =
+                    {
+                        new FrontendIPConfigurationData()
+                        {
+                            Name = frontendName,
+                            PrivateIPAllocationMethod = NetworkIPAllocationMethod.Dynamic,
+                            PublicIPAddress = new PublicIPAddressData()
+                            {
+                                Id = publicIP.Id,
+                                LinkedPublicIPAddress = new PublicIPAddressData()
+                                {
+                                    Id = publicIP.Id,
+                                }
+                            }
+                        }
+                    },
+                    BackendAddressPools =
+                    {
+                        new BackendAddressPoolData()
+                        {
+                            Name = backendPoolName1
+                        },
+                        new BackendAddressPoolData()
+                        {
+                            Name = backendPoolName2
+                        }
+                    },
+                    // Add two rules that uses above backend and probe
+                    LoadBalancingRules =
+                    {
+                        new LoadBalancingRuleData()
+                        {
+                            Name = httpLoadBalancingRule,
+                            FrontendIPConfigurationId = frontendIPConfigurationId,
+                            BackendAddressPoolId = backendAddressPoolId1,
+                            Protocol = LoadBalancingTransportProtocol.Tcp,
+                            FrontendPort = 80,
+                            BackendPort = 80,
+                            EnableFloatingIP = false,
+                            IdleTimeoutInMinutes = 15,
+                            ProbeId = new ResourceIdentifier($"{resourceGroup.Id}/providers/Microsoft.Network/loadBalancers/{loadBalancerName1}/probes/{httpProbe}"),
+                        },
+                        new LoadBalancingRuleData()
+                        {
+                            Name = httpsLoadBalancingRule,
+                            FrontendIPConfigurationId = frontendIPConfigurationId,
+                            BackendAddressPoolId = backendAddressPoolId2,
+                            Protocol = LoadBalancingTransportProtocol.Tcp,
+                            FrontendPort = 443,
+                            BackendPort = 443,
+                            EnableFloatingIP = false,
+                            IdleTimeoutInMinutes = 15,
+                            ProbeId = new ResourceIdentifier($"{resourceGroup.Id}/providers/Microsoft.Network/loadBalancers/{loadBalancerName1}/probes/{httpsProbe}"),
+                        },
+                    },
+                    // Add two probes one per rule
+                    Probes =
+                    {
+                        new ProbeData()
+                        {
+                            Name = httpProbe,
+                            Protocol = ProbeProtocol.Http,
+                            Port = 80,
+                            IntervalInSeconds = 10,
+                            NumberOfProbes = 2,
+                            RequestPath = "/",
+                        },
+                        new ProbeData()
+                        {
+                            Name = httpsProbe,
+                            Protocol = ProbeProtocol.Https,
+                            Port = 443,
+                            IntervalInSeconds = 10,
+                            NumberOfProbes = 2,
+                            RequestPath = "/",
+                        }
+                    },
+                    // Add two nat pools to enable direct VM connectivity for
+                    //  SSH to port 22 and TELNET to port 23
+                    InboundNatPools =
+                    {
+                        new LoadBalancerInboundNatPool()
+                        {
+                            Name = natPool50XXto22,
+                            FrontendIPConfigurationId = frontendIPConfigurationId,
+                            Protocol = LoadBalancingTransportProtocol.Tcp,
+                            FrontendPortRangeStart = 5000,
+                            FrontendPortRangeEnd = 5099,
+                            BackendPort = 22,
+                            IdleTimeoutInMinutes = 15,
+                            EnableFloatingIP = false,
+                        },
+                        new LoadBalancerInboundNatPool()
+                        {
+                            Name = natPool60XXto23,
+                            FrontendIPConfigurationId = frontendIPConfigurationId,
+                            Protocol = LoadBalancingTransportProtocol.Tcp,
+                            FrontendPortRangeStart = 6000,
+                            FrontendPortRangeEnd = 6099,
+                            BackendPort = 23,
+                            IdleTimeoutInMinutes = 15,
+                            EnableFloatingIP = false,
+                        },
+                    },
+                };
+                var loadBalancerLro1 = await resourceGroup.GetLoadBalancers().CreateOrUpdateAsync(WaitUntil.Completed, loadBalancerName1, loadBalancerInput);
+                LoadBalancerResource loadBalancer1 = loadBalancerLro1.Value;
 
                 // Print load balancer details
                 Utilities.Log("Created a load balancer");
-                Utilities.PrintLoadBalancer(loadBalancer1);
 
                 //=============================================================
                 // Create a virtual machine scale set with three virtual machines
@@ -200,33 +265,114 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
                 var fileUris = new List<string>();
                 fileUris.Add(apacheInstallScript);
 
-                var virtualMachineScaleSet = azure.VirtualMachineScaleSets
-                        .Define(vmssName)
-                        .WithRegion(Region.USEast)
-                        .WithExistingResourceGroup(rgName)
-                        .WithSku(VirtualMachineScaleSetSkuTypes.StandardD3v2)
-                        .WithExistingPrimaryNetworkSubnet(network, "Front-end")
-                        .WithExistingPrimaryInternetFacingLoadBalancer(loadBalancer1)
-                        .WithPrimaryInternetFacingLoadBalancerBackends(backendPoolName1, backendPoolName2)
-                        .WithPrimaryInternetFacingLoadBalancerInboundNatPools(natPool50XXto22, natPool60XXto23)
-                        .WithoutPrimaryInternalLoadBalancer()
-                        .WithPopularLinuxImage(KnownLinuxVirtualMachineImage.UbuntuServer16_04_Lts)
-                        .WithRootUsername(userName)
-                        .WithSsh(sshKey)
-                        .WithNewStorageAccount(storageAccountName1)
-                        .WithNewStorageAccount(storageAccountName2)
-                        .WithNewStorageAccount(storageAccountName3)
-                        .WithCapacity(3)
-                        // Use a VM extension to install Apache Web servers
-                        .DefineNewExtension("CustomScriptForLinux")
-                            .WithPublisher("Microsoft.OSTCExtensions")
-                            .WithType("CustomScriptForLinux")
-                            .WithVersion("1.4")
-                            .WithMinorVersionAutoUpgrade()
-                            .WithPublicSetting("fileUris", fileUris)
-                            .WithPublicSetting("commandToExecute", installCommand)
-                            .Attach()
-                        .Create();
+                VirtualMachineScaleSetData vmssInput = new VirtualMachineScaleSetData(resourceGroup.Data.Location)
+                {
+                    Sku = new()
+                    {
+                        Name = "Standard_DS3_v2",
+                        Capacity = 3,
+                        Tier = "Standard"
+                    },
+                    UpgradePolicy = new()
+                    {
+                        Mode = VirtualMachineScaleSetUpgradeMode.Manual,
+                    },
+                    VirtualMachineProfile = new()
+                    {
+                        OSProfile = new()
+                        {
+                            ComputerNamePrefix = vmssName,
+                            AdminUsername = Utilities.CreateUsername(),
+                            LinuxConfiguration = new()
+                            {
+                                DisablePasswordAuthentication = true,
+                                SshPublicKeys =
+                                {
+                                    new SshPublicKeyConfiguration()
+                                    {
+                                        Path = $"/home/{Utilities.CreateUsername()}/.ssh/authorized_keys",
+                                        KeyData = sshKey
+                                    }
+                                },
+                            }
+                        },
+                        StorageProfile = new()
+                        {
+                            OSDisk = new VirtualMachineScaleSetOSDisk(DiskCreateOptionType.FromImage)
+                            {
+                                DiskSizeGB = 64,
+                                Caching = CachingType.ReadWrite,
+                                ManagedDisk = new VirtualMachineScaleSetManagedDisk()
+                                {
+                                    StorageAccountType = StorageAccountType.PremiumLrs,
+                                }
+                            },
+                            ImageReference = new ImageReference()
+                            {
+                                Publisher = "Canonical",
+                                Offer = "UbuntuServer",
+                                Sku = "16.04-LTS",
+                                Version = "latest"
+                            }
+                        },
+                        NetworkProfile = new VirtualMachineScaleSetNetworkProfile()
+                        {
+                            NetworkInterfaceConfigurations =
+                            {
+                                new VirtualMachineScaleSetNetworkConfiguration("example")
+                                {
+                                    Primary = true,
+                                    IPConfigurations =
+                                    {
+                                        new VirtualMachineScaleSetIPConfiguration("internal")
+                                        {
+                                            Primary = true,
+                                            SubnetId = vnet.Data.Subnets.First(item=>item.Name == "Front-end").Id,
+                                            LoadBalancerBackendAddressPools =
+                                            {
+                                                new WritableSubResource(){ Id = backendAddressPoolId1 },
+                                                new WritableSubResource(){ Id = backendAddressPoolId2 }
+                                            },
+                                            LoadBalancerInboundNatPools =
+                                            {
+                                                new WritableSubResource(){ Id = loadBalancer1.Data.InboundNatPools[0].Id },
+                                                new WritableSubResource(){ Id = loadBalancer1.Data.InboundNatPools[1].Id },
+                                            }
+                                        },
+                                    },
+                                }
+                            }
+                        }
+                    }
+                };
+
+                // Use a VM extension to install Apache Web servers
+                vmssInput.VirtualMachineProfile.ExtensionProfile = new VirtualMachineScaleSetExtensionProfile()
+                {
+                    Extensions =
+                    {
+                        new VirtualMachineScaleSetExtensionData("CustomScriptForLinux")
+                        {
+
+                            Publisher = "Microsoft.OSTCExtensions",
+                            ExtensionType = "CustomScriptForLinux",
+                            TypeHandlerVersion = "1.4",
+                            AutoUpgradeMinorVersion = true,
+                            EnableAutomaticUpgrade = false,
+                            Settings = BinaryData.FromObjectAsJson(new
+                                {
+                                    fileUris = fileUris
+                                }),
+                            ProtectedSettings = BinaryData.FromObjectAsJson(new
+                                {
+                                    commandToExecute = installCommand,
+                                }),
+                        }
+                    }
+                };
+
+                var vmssLro = await resourceGroup.GetVirtualMachineScaleSets().CreateOrUpdateAsync(WaitUntil.Completed, vmssName, vmssInput);
+                VirtualMachineScaleSetResource vmss = vmssLro.Value;
 
                 var t2 = DateTime.UtcNow;
                 Utilities.Log("Created a virtual machine scale set with "
@@ -234,20 +380,22 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
                         + ((t2 - t1).TotalSeconds) + " seconds) \r\n");
 
                 // Print virtual machine scale set details
-                // Utilities.Print(virtualMachineScaleSet);
+                Utilities.Log("VMSS name: " + vmss.Data.Name);
+                Utilities.Log("Capacity: " + vmss.Data.Sku.Capacity);
+                Utilities.Log("VM image: " + vmss.Data.VirtualMachineProfile.StorageProfile.ImageReference.Offer);
 
                 //=============================================================
                 // Stop the virtual machine scale set
 
                 Utilities.Log("Stopping virtual machine scale set ...");
-                virtualMachineScaleSet.PowerOff();
+                await vmss.PowerOffAsync(WaitUntil.Completed);
                 Utilities.Log("Stopped virtual machine scale set");
 
                 //=============================================================
                 // Start the virtual machine scale set
 
                 Utilities.Log("Starting virtual machine scale set ...");
-                virtualMachineScaleSet.Start();
+                await vmss.PowerOnAsync(WaitUntil.Completed);
                 Utilities.Log("Started virtual machine scale set");
 
                 //=============================================================
@@ -257,9 +405,9 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
                 Utilities.Log("Updating virtual machine scale set "
                         + "- double the no. of virtual machines ...");
 
-                virtualMachineScaleSet.Update()
-                    .WithCapacity(6)
-                    .Apply();
+                VirtualMachineScaleSetData updateVmssInput = vmss.Data;
+                updateVmssInput.Sku.Capacity = 6;
+                _ = await resourceGroup.GetVirtualMachineScaleSets().CreateOrUpdateAsync(WaitUntil.Completed, vmssName, updateVmssInput);
 
                 Utilities.Log("Doubled the no. of virtual machines in "
                         + "the virtual machine scale set");
@@ -268,7 +416,7 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
                 // re-start virtual machine scale set
 
                 Utilities.Log("re-starting virtual machine scale set ...");
-                virtualMachineScaleSet.Restart();
+                await vmss.RestartAsync(WaitUntil.Completed);
                 Utilities.Log("re-started virtual machine scale set");
             }
             finally
