@@ -1,19 +1,27 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License. See License.txt in the project root for license information.
 
-using Microsoft.Azure.Management.Fluent;
-using Microsoft.Azure.Management.Compute.Fluent;
-using Microsoft.Azure.Management.ResourceManager.Fluent;
-using Microsoft.Azure.Management.ResourceManager.Fluent.Core;
-using Microsoft.Azure.Management.Network.Fluent.Models;
-using Microsoft.Azure.Management.Samples.Common;
-using System;
-using System.Collections.Generic;
+using Azure;
+using Azure.Core;
+using Azure.Identity;
+using Azure.ResourceManager.Resources.Models;
+using Azure.ResourceManager.Samples.Common;
+using Azure.ResourceManager.Resources;
+using Azure.ResourceManager;
+using System.Net;
+using Azure.ResourceManager.Network.Models;
+using Azure.ResourceManager.Network;
+using Azure.ResourceManager.Compute.Models;
+using Azure.ResourceManager.Compute;
+using System.Net.NetworkInformation;
+using System.Xml.Linq;
 
 namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
 {
     public class Program
     {
+        private static ResourceIdentifier? _resourceGroupId = null;
+
         private readonly static string httpProbe = "httpProbe";
         private readonly static string httpsProbe = "httpsProbe";
         private readonly static string httpLoadBalancingRule = "httpRule";
@@ -35,15 +43,16 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
          *    - Double the no. of virtual machines
          *  - Restart a virtual machine scale set
          */
-        public static void RunSample(IAzure azure)
+        public static async Task RunSample(ArmClient client)
         {
-            string vmssName = SdkContext.RandomResourceName("vmss", 24);
-            string storageAccountName1 = SdkContext.RandomResourceName("stg1", 24);
-            string storageAccountName2 = SdkContext.RandomResourceName("stg2", 24);
-            string storageAccountName3 = SdkContext.RandomResourceName("stg3", 24);
-            string rgName = SdkContext.RandomResourceName("rgCOVS", 15);
-            string vnetName = SdkContext.RandomResourceName("vnet", 24);
-            string loadBalancerName1 = SdkContext.RandomResourceName("intlb" + "-", 18);
+            string rgName = Utilities.CreateRandomName("ComputeSampleRG");
+            string vnetName = Utilities.CreateRandomName("vnet");
+
+            string vmssName = Utilities.CreateRandomName("vmss");
+            string storageAccountName1 = Utilities.CreateRandomName("1stg");
+            string storageAccountName2 = Utilities.CreateRandomName("2stg");
+            string storageAccountName3 = Utilities.CreateRandomName("3stg");
+            string loadBalancerName1 = Utilities.CreateRandomName("loadbalancer");
             string publicIpName = "pip-" + loadBalancerName1;
             string frontendName = loadBalancerName1 + "-FE1";
             string backendPoolName1 = loadBalancerName1 + "-BAP1";
@@ -51,22 +60,43 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
 
             try
             {
+                // Get default subscription
+                SubscriptionResource subscription = await client.GetDefaultSubscriptionAsync();
+
+                // Create a resource group in the EastUS region
+                Utilities.Log($"creating resource group...");
+                ArmOperation<ResourceGroupResource> rgLro = await subscription.GetResourceGroups().CreateOrUpdateAsync(WaitUntil.Completed, rgName, new ResourceGroupData(AzureLocation.EastUS));
+                ResourceGroupResource resourceGroup = rgLro.Value;
+                _resourceGroupId = resourceGroup.Id;
+                Utilities.Log("Created a resource group with name: " + resourceGroup.Data.Name);
+
                 //=============================================================
                 // Create a virtual network with a frontend subnet
                 Utilities.Log("Creating virtual network with a frontend subnet ...");
 
-                var network = azure.Networks.Define(vnetName)
-                        .WithRegion(Region.USEast)
-                        .WithNewResourceGroup(rgName)
-                        .WithAddressSpace("172.16.0.0/16")
-                        .DefineSubnet("Front-end")
-                            .WithAddressPrefix("172.16.1.0/24")
-                            .Attach()
-                        .Create();
+                //var network = azure.Networks.Define(vnetName)
+                //        .WithRegion(Region.USEast)
+                //        .WithNewResourceGroup(rgName)
+                //        .WithAddressSpace("172.16.0.0/16")
+                //        .DefineSubnet("Front-end")
+                //            .WithAddressPrefix("172.16.1.0/24")
+                //            .Attach()
+                //        .Create();
 
-                Utilities.Log("Created a virtual network");
-                // Print the virtual network details
-                Utilities.PrintVirtualNetwork(network);
+                Utilities.Log("Creating virtual network...");
+                VirtualNetworkData vnetInput = new VirtualNetworkData()
+                {
+                    Location = resourceGroup.Data.Location,
+                    AddressPrefixes = { "10.10.0.0/16" },
+                    Subnets =
+                    {
+                        new SubnetData() { Name = "Front-end", AddressPrefix = "10.10.1.0/24"},
+                        new SubnetData() { Name = "subnet1", AddressPrefix = "10.10.2.0/24"},
+                        new SubnetData() { Name = "subnet2", AddressPrefix = "10.10.3.0/24"},
+                    },
+                };
+                var vnetLro = await resourceGroup.GetVirtualNetworks().CreateOrUpdateAsync(WaitUntil.Completed, vnetName, vnetInput);
+                Utilities.Log($"Created a virtual network: {vnetLro.Value.Data.Name}");
 
                 //=============================================================
                 // Create a public IP address
@@ -245,9 +275,12 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
             {
                 try
                 {
-                    Utilities.Log("Deleting Resource Group: " + rgName);
-                    azure.ResourceGroups.DeleteByName(rgName);
-                    Utilities.Log("Deleted Resource Group: " + rgName);
+                    if (_resourceGroupId is not null)
+                    {
+                        Utilities.Log($"Deleting Resource Group: {_resourceGroupId}");
+                        await client.GetResourceGroupResource(_resourceGroupId).DeleteAsync(WaitUntil.Completed);
+                        Utilities.Log($"Deleted Resource Group: {_resourceGroupId}");
+                    }
                 }
                 catch (NullReferenceException)
                 {
@@ -260,24 +293,20 @@ namespace ManageVirtualMachineScaleSetWithUnmanagedDisks
             }
         }
 
-        public static void Main(string[] args)
+        public static async Task Main(string[] args)
         {
             try
             {
-                //=============================================================
+                //=================================================================
                 // Authenticate
-                var credentials = SdkContext.AzureCredentialsFactory.FromFile(Environment.GetEnvironmentVariable("AZURE_AUTH_LOCATION"));
+                var clientId = Environment.GetEnvironmentVariable("CLIENT_ID");
+                var clientSecret = Environment.GetEnvironmentVariable("CLIENT_SECRET");
+                var tenantId = Environment.GetEnvironmentVariable("TENANT_ID");
+                var subscription = Environment.GetEnvironmentVariable("SUBSCRIPTION_ID");
+                ClientSecretCredential credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+                ArmClient client = new ArmClient(credential, subscription);
 
-                var azure = Azure
-                    .Configure()
-                    .WithLogLevel(HttpLoggingDelegatingHandler.Level.Basic)
-                    .Authenticate(credentials)
-                    .WithDefaultSubscription();
-
-                // Print selected subscription
-                Utilities.Log("Selected subscription: " + azure.SubscriptionId);
-
-                RunSample(azure);
+                await RunSample(client);
             }
             catch (Exception ex)
             {
